@@ -1,5 +1,6 @@
 package com.tonyxlh.usbbarcodescanner;
 
+import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.os.Bundle;
@@ -15,6 +16,12 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.dynamsoft.cvr.CaptureVisionRouter;
+import com.dynamsoft.cvr.CapturedResult;
+import com.dynamsoft.cvr.EnumPresetTemplate;
+import com.dynamsoft.dbr.BarcodeResultItem;
+import com.dynamsoft.dbr.DecodedBarcodesResult;
+import com.dynamsoft.license.LicenseManager;
 import com.serenegiant.usb.CameraDialog;
 import com.serenegiant.usb.USBMonitor;
 import com.serenegiant.usb.UVCCamera;
@@ -22,6 +29,7 @@ import com.serenegiant.usbcameracommon.UVCCameraHandler;
 import com.serenegiant.widget.CameraViewInterface;
 
 import java.util.Timer;
+import java.util.TimerTask;
 
 public class MainActivity extends AppCompatActivity implements CameraDialog.CameraDialogParent  {
     /**
@@ -57,6 +65,7 @@ public class MainActivity extends AppCompatActivity implements CameraDialog.Came
     private USBMonitor mUSBMonitor;
     private TextView resultTextView;
     private Timer timer = null;
+    private CaptureVisionRouter mRouter;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -71,6 +80,14 @@ public class MainActivity extends AppCompatActivity implements CameraDialog.Came
         mUSBMonitor = new USBMonitor(this, mOnDeviceConnectListener);
         mCameraHandler = UVCCameraHandler.createHandler(this, mUVCCameraView,
                 USE_SURFACE_ENCODER ? 0 : 1, PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_MODE);
+        if (savedInstanceState == null) {
+            LicenseManager.initLicense("DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9", this, (isSuccess, error) -> {
+                if (!isSuccess) {
+                    error.printStackTrace();
+                }
+            });
+        }
+        mRouter = new CaptureVisionRouter(this);
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
@@ -99,13 +116,14 @@ public class MainActivity extends AppCompatActivity implements CameraDialog.Came
             if (mCameraHandler != null) {
                 mCameraHandler.open(ctrlBlock);
                 startPreview();
+                startDecoding();
             }
 
         }
 
         @Override
         public void onDisconnect(final UsbDevice device, final USBMonitor.UsbControlBlock ctrlBlock) {
-
+            stopDecoding();
         }
         @Override
         public void onDettach(final UsbDevice device) {
@@ -154,5 +172,50 @@ public class MainActivity extends AppCompatActivity implements CameraDialog.Came
     public void onDialogResult(boolean b) {
 
     }
+    private void startDecoding(){
+        TimerTask task = new TimerTask() {
+            @Override
+            public void run() {
+                Bitmap bmp = mUVCCameraView.captureStillImage();
+                decode(bmp);
+            }
+        };
+        timer = new Timer();
+        timer.schedule(task, 1000, 100);
+    }
+    private void stopDecoding(){
+        if (timer != null){
+            timer.cancel();
+            timer = null;
+        }
+    }
 
+    private void decode(final Bitmap bitmap){
+        try {
+            CapturedResult result = mRouter.capture(bitmap, EnumPresetTemplate.PT_READ_BARCODES);
+            DecodedBarcodesResult barcodeResult = result.getDecodedBarcodesResult();
+            runOnUiThread(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            if (barcodeResult != null) {
+                                BarcodeResultItem[] results = barcodeResult.getItems();
+                                StringBuilder sb = new StringBuilder();
+                                sb.append("Found ");
+                                sb.append(results.length);
+                                sb.append(" barcode(s):");
+                                sb.append("\n");
+                                for (BarcodeResultItem result : results){
+                                    sb.append(result.getText());
+                                    sb.append("\n");
+                                }
+                                resultTextView.setText(sb.toString());
+                            }
+                        }
+                    }
+            );
+        } catch (Exception e){
+            e.printStackTrace();
+        }
+    }
 }
